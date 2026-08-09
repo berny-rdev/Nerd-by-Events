@@ -31,7 +31,14 @@ yarn-error.*
 *.pem
 
 # local env files
+# NOTE: the default Expo .gitignore only covers `.env*.local`, which would let
+# a real `.env` get committed. This repo keeps its keys in `.env`, so:
+.env
 .env*.local
+!.env.example
+
+# cloudflare worker
+proxy/.wrangler/
 
 # typescript
 *.tsbuildinfo

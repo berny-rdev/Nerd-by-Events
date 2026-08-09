@@ -9,12 +9,20 @@
       "@/assets/*": [
         "./assets/*"
       ]
-    }
+    },
+    "types": [
+      "jest",
+      "react"
+    ]
   },
   "include": [
     "**/*.ts",
     "**/*.tsx",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "proxy"
   ]
 }

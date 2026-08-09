@@ -1,0 +1,68 @@
+/**
+ * Small fetch wrapper shared by every source adapter.
+ *
+ * Two things it adds over bare `fetch`:
+ *  - a timeout, because a hung request would otherwise pin a source's promise
+ *    open forever and the aggregate search would never settle;
+ *  - a typed error carrying the status, so the UI can tell "your key is wrong"
+ *    (401/403) apart from "the network is down".
+ */
+
+export class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly url: string,
+    readonly body: string,
+  ) {
+    super(`HTTP ${status} from ${new URL(url).host}`);
+    this.name = 'HttpError';
+  }
+
+  /** True when the problem is our credentials rather than the network. */
+  get isAuthError() {
+    return this.status === 401 || this.status === 403;
+  }
+}
+
+type FetchOptions = {
+  /** Caller's cancellation signal — TanStack Query passes one in. */
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
+export async function fetchJson<T>(url: string, options: FetchOptions = {}): Promise<T> {
+  const { signal, timeoutMs = 10_000 } = options;
+
+  // Hermes doesn't reliably have AbortSignal.any, so combine by hand: our
+  // timeout controller aborts on its own OR when the caller's signal fires.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const forwardAbort = () => controller.abort();
+  signal?.addEventListener('abort', forwardAbort);
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' },
+    });
+
+    if (!response.ok) {
+      throw new HttpError(response.status, url, await response.text().catch(() => ''));
+    }
+
+    return (await response.json()) as T;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener('abort', forwardAbort);
+  }
+}
+
+/** Builds a query string, dropping empty values so we don't send `&city=`. */
+export function buildUrl(base: string, params: Record<string, string | number | undefined>) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') search.set(key, String(value));
+  }
+  const qs = search.toString();
+  return qs ? `${base}?${qs}` : base;
+}

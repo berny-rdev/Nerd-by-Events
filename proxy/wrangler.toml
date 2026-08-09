@@ -1,0 +1,17 @@
+name = "nearby-events-proxy"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+
+# SERPAPI_API_KEY is NOT set here — it's a secret:
+#   npx wrangler secret put SERPAPI_API_KEY
+#
+# Anything in [vars] ends up in the deployed script's plain-text config, which
+# defeats the entire point of having a proxy.
+
+[vars]
+# Optional. Comma-separated origins for the web build, e.g.
+# ALLOWED_ORIGINS = "http://localhost:8081"
+ALLOWED_ORIGINS = ""
+
+[observability]
+enabled = true
