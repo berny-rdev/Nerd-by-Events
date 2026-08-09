@@ -35,7 +35,7 @@ export type SearchResult = {
   rawCount: number;
 };
 
-function describe(error: unknown): { message: string; isAuthError: boolean } {
+function describeError(error: unknown): { message: string; isAuthError: boolean } {
   if (error instanceof HttpError) {
     return {
       message: error.isAuthError
@@ -52,6 +52,11 @@ function describe(error: unknown): { message: string; isAuthError: boolean } {
   return { message: 'Unknown error', isAuthError: false };
 }
 
+/** Names the shape a provider wrongly returned, for the failure message. */
+function describeShape(value: unknown): string {
+  return value === null ? 'null' : typeof value;
+}
+
 export async function searchEvents(query: SearchQuery): Promise<SearchResult> {
   const configured = sources.filter((source) => source.isConfigured());
   const skipped = sources
@@ -59,7 +64,12 @@ export async function searchEvents(query: SearchQuery): Promise<SearchResult> {
     .map((source) => ({ source: source.id, label: source.label }));
 
   const settled = await Promise.allSettled(
-    configured.map((source) => source.search(query)),
+    // `Promise.resolve().then(...)` rather than calling search() directly: a
+    // provider that throws *synchronously* — a non-async search() with an
+    // up-front validation guard, say — would throw inside this .map(), before
+    // allSettled ever sees it, and reject the whole aggregate. The wrapper
+    // moves that throw inside a promise so allSettled can catch it.
+    configured.map((source) => Promise.resolve().then(() => source.search(query))),
   );
 
   const events: Event[] = [];
@@ -67,12 +77,30 @@ export async function searchEvents(query: SearchQuery): Promise<SearchResult> {
 
   settled.forEach((result, index) => {
     const source = configured[index];
-    if (result.status === 'fulfilled') {
-      events.push(...result.value);
-    } else {
-      const { message, isAuthError } = describe(result.reason);
+
+    if (result.status === 'rejected') {
+      const { message, isAuthError } = describeError(result.reason);
       failures.push({ source: source.id, label: source.label, message, isAuthError });
+      return;
     }
+
+    // The signature promises Event[], but an adapter is code we don't control
+    // and the annotation isn't enforced at runtime. Spreading a non-array here
+    // throws a TypeError that rejects the whole aggregate — precisely the
+    // failure allSettled is here to prevent — so trust the value, not the type.
+    const value = result.value as unknown;
+
+    if (!Array.isArray(value)) {
+      failures.push({
+        source: source.id,
+        label: source.label,
+        message: `Returned a non-array (${describeShape(value)})`,
+        isAuthError: false,
+      });
+      return;
+    }
+
+    events.push(...(value as Event[]));
   });
 
   return {
