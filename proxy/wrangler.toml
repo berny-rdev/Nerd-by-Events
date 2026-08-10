@@ -2,14 +2,29 @@ name = "nearby-events-proxy"
 main = "src/index.ts"
 compatibility_date = "2025-06-01"
 
-# SERPAPI_API_KEY is NOT set here — it's a secret:
-#   npx wrangler secret put SERPAPI_API_KEY
+# Required by @anthropic-ai/sdk: its credential-resolution chain imports node:fs
+# and node:path to look for an `ant auth login` profile on disk. That path never
+# runs here (the client is constructed with an explicit apiKey), but the imports
+# are still in the bundle, and without this flag they throw at load time.
+compatibility_flags = ["nodejs_compat"]
+
+# ---------------------------------------------------------------------------
+# SECRETS — none of these live in this file. Set each one with:
 #
-# Anything in [vars] ends up in the deployed script's plain-text config, which
-# defeats the entire point of having a proxy.
+#   npx wrangler secret put <NAME>
+#
+#   ANTHROPIC_API_KEY      powers /expand and /classify   (metered, per token)
+#   SERPAPI_API_KEY        powers /serpapi/events         (metered, per search)
+#   TICKETMASTER_API_KEY   powers /ticketmaster/events    (rate-limited, free)
+#   SEATGEEK_CLIENT_ID     powers /seatgeek/events        (rate-limited, free)
+#
+# Anything under [vars] below ends up in the deployed script's plain-text
+# config, which is why no key is there. Check GET /health after deploying —
+# it reports which secrets are set without revealing any of them.
+# ---------------------------------------------------------------------------
 
 [vars]
-# Optional. Comma-separated origins for the web build, e.g.
+# Optional. Comma-separated origins for the Expo web build, e.g.
 # ALLOWED_ORIGINS = "http://localhost:8081"
 ALLOWED_ORIGINS = ""
 

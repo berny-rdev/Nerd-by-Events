@@ -1,0 +1,27 @@
+{
+  "scene": "Japanese and Chinese virtual-singer music: Vocaloid and voice-synthesis producers, VTuber and virtual idol acts performing as characters, and utaite who came up through that scene. Relevant events are live shows, concerts, DJ sets, orchestral or arrangement programs, and fan-run gatherings centered on this music — not general anime conventions, cosplay events, or Japanese cultural programming that merely overlaps the audience.",
+  "core": ["Vocaloid", "V-Singer", "Hololive"],
+  "adjacent": [
+    {"name": "Hatsune Miku", "kind": "artist", "why": "the central Vocaloid character; headlines concerts under her own name"},
+    {"name": "Kasane Teto", "kind": "artist", "why": "UTAU-origin virtual singer with a large independent following"},
+    {"name": "Luo Tianyi", "kind": "artist", "why": "primary Chinese Vocaloid, headlines her own concerts"},
+    {"name": "Yuezheng Ling", "kind": "artist", "why": "Chinese Vocaloid frequently featured in v-singer collaborations"},
+    {"name": "Hanser", "kind": "artist", "why": "Chinese virtual singer with strong independent fanbase"},
+    {"name": "Eve", "kind": "artist", "why": "Vocaloid-scene producer who performs live under his own name"},
+    {"name": "Deco*27", "kind": "artist", "why": "influential Vocaloid composer, appears at live events and DJ sets"},
+    {"name": "Neru", "kind": "artist", "why": "Vocaloid producer active in the synthesis music scene"},
+    {"name": "Mafumafu", "kind": "artist", "why": "utaite bridging Vocaloid production and live vocal performance"},
+    {"name": "Soraru", "kind": "artist", "why": "utaite specializing in Vocaloid cover arrangements"},
+    {"name": "Ado", "kind": "artist", "why": "came up as an utaite singing Vocaloid-producer material; same scene lineage"},
+    {"name": "Miku Expo", "kind": "event", "why": "global Vocaloid concert series; listings use this name directly"},
+    {"name": "Magical Mirai", "kind": "event", "why": "annual Vocaloid concert and exhibition series"},
+    {"name": "Hololive", "kind": "agency", "why": "VTuber agency; members perform solo under their own names, not the agency's"},
+    {"name": "NIJISANJI", "kind": "agency", "why": "major VTuber agency parallel to Hololive with music-focused talents"},
+    {"name": "VirtuaReal", "kind": "agency", "why": "Chinese VTuber collective dominant on Bilibili"},
+    {"name": "A-SOUL", "kind": "agency", "why": "Chinese virtual idol group blending character design with music production"},
+    {"name": "Project SEKAI", "kind": "context", "why": "rhythm game built on Vocaloid music; signals scene adjacency in a listing"},
+    {"name": "Synthesizer V", "kind": "context", "why": "voice synthesis platform; indicates a producer works in this medium"},
+    {"name": "Crypton Future Media", "kind": "context", "why": "publisher of the foundational Vocaloid characters"},
+    {"name": "Piapro", "kind": "context", "why": "community platform where much of this music originates"}
+  ]
+}

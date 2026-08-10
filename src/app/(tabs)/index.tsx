@@ -3,12 +3,14 @@ import { FlatList, Platform, Pressable, StyleSheet, TextInput, View } from 'reac
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { EventCard, EVENT_CARD_HEIGHT } from '@/components/event-card';
+import { ExpansionStrip } from '@/components/expansion-strip';
 import { EmptyState, ErrorState, LoadingState } from '@/components/state-views';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
 import { useEvents } from '@/hooks/use-events';
+import { useExpansion } from '@/hooks/use-expansion';
 import { useSavedEvents, useToggleSave } from '@/hooks/use-saved-events';
 import { config } from '@/lib/config';
 import { useTheme } from '@/hooks/use-theme';
@@ -20,15 +22,30 @@ export default function BrowseScreen() {
   const [keyword, setKeyword] = useState('');
   const [city, setCity] = useState(config.defaultCity);
 
+  /**
+   * Only set on an explicit submit, and only ever read by expansion.
+   *
+   * Expansion runs a large model and takes ~20s cold, so it must never fire per
+   * keystroke the way the debounced keyword search does.
+   */
+  const [submitted, setSubmitted] = useState('');
+
   // Debounce the *inputs*, not the request. The query key derives from these,
   // so a settled value is what actually triggers a fetch.
   const debouncedKeyword = useDebouncedValue(keyword);
   const debouncedCity = useDebouncedValue(city);
 
+  // The keyword search is already in flight from the debounce by the time
+  // anyone hits return, so results are on screen before expansion is asked for.
   const { data, isLoading, isError, error, refetch, isFetching } = useEvents(
     debouncedKeyword,
     debouncedCity,
   );
+
+  // Runs alongside the search above and is read by nothing on the results path
+  // — no loading, error, or empty branch below consults it. Expansion can take
+  // 20 seconds or fail outright and the list is unaffected either way.
+  const expansion = useExpansion(submitted);
 
   const { data: saved } = useSavedEvents();
   const { toggle } = useToggleSave();
@@ -74,6 +91,9 @@ export default function BrowseScreen() {
               placeholderTextColor={theme.textSecondary}
               autoCorrect={false}
               returnKeyType="search"
+              // Submitting is what asks for an expansion. The search itself is
+              // already running from the debounce above.
+              onSubmitEditing={() => setSubmitted(keyword)}
               style={[
                 styles.input,
                 { backgroundColor: theme.backgroundElement, color: theme.text },
@@ -95,6 +115,10 @@ export default function BrowseScreen() {
 
           <SourceNotices data={data} />
         </View>
+
+        {/* Sits between the inputs and the list, outside every results branch —
+            it can never replace or delay what's below it. */}
+        <ExpansionStrip {...expansion} />
 
         {isLoading ? (
           <LoadingState />

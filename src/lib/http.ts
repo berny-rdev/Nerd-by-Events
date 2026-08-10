@@ -28,10 +28,14 @@ type FetchOptions = {
   /** Caller's cancellation signal — TanStack Query passes one in. */
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Defaults to GET. */
+  method?: 'GET' | 'POST';
+  /** JSON-serialized and sent as the body. Implies POST-shaped headers. */
+  json?: unknown;
 };
 
 export async function fetchJson<T>(url: string, options: FetchOptions = {}): Promise<T> {
-  const { signal, timeoutMs = 10_000 } = options;
+  const { signal, timeoutMs = 10_000, method = 'GET', json: body } = options;
 
   // Hermes doesn't reliably have AbortSignal.any, so combine by hand: our
   // timeout controller aborts on its own OR when the caller's signal fires.
@@ -42,8 +46,13 @@ export async function fetchJson<T>(url: string, options: FetchOptions = {}): Pro
 
   try {
     const response = await fetch(url, {
+      method,
       signal: controller.signal,
-      headers: { Accept: 'application/json' },
+      headers: {
+        Accept: 'application/json',
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
 
     if (!response.ok) {

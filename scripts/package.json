@@ -1,0 +1,5 @@
+{
+  "//": "Scopes ES module semantics to scripts/ only. Adding \"type\": \"module\" to the root package.json instead would break Expo's CommonJS config files (babel.config.js, metro.config.js). Not a real package — no name, never installed, no dependencies of its own; it resolves @anthropic-ai/sdk from the root node_modules.",
+  "type": "module",
+  "private": true
+}

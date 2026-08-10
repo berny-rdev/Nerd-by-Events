@@ -8,11 +8,16 @@
  * rather than a range object, and the image lives on the performer.
  */
 
-import { config } from '@/lib/config';
+import { config, hasProxy } from '@/lib/config';
 import { buildUrl, fetchJson } from '@/lib/http';
 import type { Event, EventSource, SearchQuery } from './types';
 
-const BASE = 'https://api.seatgeek.com/2/events';
+/**
+ * The Worker route, not SeatGeek directly — the Client ID lives there as a
+ * secret. The Worker also owns the `datetime_utc.gte` floor that keeps last
+ * year's games out of the results, so it isn't sent from here any more.
+ */
+const path = () => `${config.eventsProxyUrl}/seatgeek/events`;
 
 type SgEvent = {
   id: number;
@@ -70,19 +75,10 @@ export const seatgeek: EventSource = {
   id: 'seatgeek',
   label: 'SeatGeek',
 
-  isConfigured: () => config.seatgeekClientId.length > 0,
+  isConfigured: hasProxy,
 
   async search({ keyword, city, limit = 20, signal }: SearchQuery) {
-    const url = buildUrl(BASE, {
-      client_id: config.seatgeekClientId,
-      q: keyword,
-      'venue.city': city,
-      per_page: limit,
-      sort: 'datetime_local.asc',
-      // Past events are still in the index; without this every search leads
-      // with last year's games.
-      'datetime_utc.gte': new Date().toISOString().slice(0, 19),
-    });
+    const url = buildUrl(path(), { keyword, city, limit });
 
     const data = await fetchJson<SgResponse>(url, { signal });
 

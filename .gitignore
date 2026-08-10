@@ -39,6 +39,8 @@ yarn-error.*
 
 # cloudflare worker
 proxy/.wrangler/
+# local secrets for `wrangler dev` — same role as .env, must never be committed
+proxy/.dev.vars
 
 # typescript
 *.tsbuildinfo

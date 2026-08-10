@@ -1,0 +1,8 @@
+{
+  "//": "Separate from tsconfig.json because the tests need @types/node for node:test, and @types/node and @cloudflare/workers-types both declare fetch/Request/Response. Keeping them apart avoids the conflict; src/ is typechecked against workerd's globals only, which is what actually runs in production.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "@cloudflare/workers-types"]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

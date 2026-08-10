@@ -1,21 +1,29 @@
 /**
  * Runtime configuration.
  *
- * Expo inlines any `EXPO_PUBLIC_*` variable from `.env` at build time. That
- * means these values ship inside the JS bundle and are trivially extractable
- * from an .ipa/.apk — so only read-only, rate-limited, revocable keys belong
- * here.
+ * There are no API keys here any more. Every third-party credential the app
+ * needs — Ticketmaster, SeatGeek, SerpAPI, Anthropic — lives on the Cloudflare
+ * Worker in `proxy/` as a secret, and the app knows only its URL.
  *
- * SerpAPI's key is billed per search and is NOT one of those, which is why it
- * lives on the worker in `proxy/` and the app only knows a URL.
+ * That matters because Expo inlines any `EXPO_PUBLIC_*` variable into the JS
+ * bundle at build time, where it can be recovered from a shipped .ipa/.apk. A
+ * URL is safe to publish; a metered key is not.
  */
 
 export const config = {
-  ticketmasterApiKey: process.env.EXPO_PUBLIC_TICKETMASTER_API_KEY ?? '',
-  seatgeekClientId: process.env.EXPO_PUBLIC_SEATGEEK_CLIENT_ID ?? '',
-  /** Base URL of the worker in `proxy/`, e.g. https://events-proxy.you.workers.dev */
+  /**
+   * Base URL of the worker in `proxy/`, e.g. https://events-proxy.you.workers.dev
+   *
+   * Every event source and the expansion route go through it, so an empty value
+   * means the app has no working sources at all.
+   */
   eventsProxyUrl: (process.env.EXPO_PUBLIC_EVENTS_PROXY_URL ?? '').replace(/\/$/, ''),
 
   /** Used when the user hasn't typed a city yet. */
   defaultCity: process.env.EXPO_PUBLIC_DEFAULT_CITY ?? 'New York',
 } as const;
+
+/** True when the Worker URL is set. Every source depends on it. */
+export function hasProxy(): boolean {
+  return config.eventsProxyUrl.length > 0;
+}

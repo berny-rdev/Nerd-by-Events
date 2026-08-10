@@ -6,11 +6,16 @@
  * start times with offsets, multiple image renditions, price ranges.
  */
 
-import { config } from '@/lib/config';
+import { config, hasProxy } from '@/lib/config';
 import { buildUrl, fetchJson } from '@/lib/http';
 import type { Event, EventSource, SearchQuery } from './types';
 
-const BASE = 'https://app.ticketmaster.com/discovery/v2/events.json';
+/**
+ * The Worker route, not Ticketmaster directly — the Consumer Key lives there as
+ * a secret. The Worker forwards an allowlist of params and returns the same
+ * `_embedded.events` envelope, so everything below this line is unchanged.
+ */
+const path = () => `${config.eventsProxyUrl}/ticketmaster/events`;
 
 type TmImage = { url: string; width: number; height: number; ratio?: string };
 
@@ -86,16 +91,10 @@ export const ticketmaster: EventSource = {
   id: 'ticketmaster',
   label: 'Ticketmaster',
 
-  isConfigured: () => config.ticketmasterApiKey.length > 0,
+  isConfigured: hasProxy,
 
   async search({ keyword, city, limit = 20, signal }: SearchQuery) {
-    const url = buildUrl(BASE, {
-      apikey: config.ticketmasterApiKey,
-      keyword,
-      city,
-      size: limit,
-      sort: 'date,asc',
-    });
+    const url = buildUrl(path(), { keyword, city, limit });
 
     const data = await fetchJson<TmResponse>(url, { signal });
 

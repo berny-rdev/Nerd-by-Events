@@ -18,7 +18,7 @@
  *     what stops us from scheduling a reminder for the wrong day.
  */
 
-import { config } from '@/lib/config';
+import { config, hasProxy } from '@/lib/config';
 import { buildUrl, fetchJson } from '@/lib/http';
 import type { Event, EventSource, SearchQuery } from './types';
 
@@ -156,7 +156,7 @@ export const serpapi: EventSource = {
   id: 'serpapi',
   label: 'Google Events',
 
-  isConfigured: () => config.eventsProxyUrl.length > 0,
+  isConfigured: hasProxy,
 
   async search({ keyword, city, limit = 20, signal }: SearchQuery) {
     // The engine takes one natural-language query, not separate fields.
