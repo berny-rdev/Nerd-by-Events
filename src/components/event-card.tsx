@@ -13,10 +13,26 @@ import type { Event } from '@/sources/types';
 /** Fixed height lets FlatList's getItemLayout skip measurement while scrolling. */
 export const EVENT_CARD_HEIGHT = 108;
 
+/**
+ * Height with the ranking reason line.
+ *
+ * A second fixed height rather than a variable one: the reason slot is reserved
+ * for the whole list whenever ranking is possible, so bands filling in
+ * progressively never reflows rows underneath the user's thumb.
+ */
+export const EVENT_CARD_HEIGHT_RANKED = 130;
+
 type Props = {
   event: Event;
   /** Rendered on the right — a save toggle on browse, a remove button on saved. */
   accessory?: React.ReactNode;
+  /**
+   * One clause explaining the band. Pass an empty string to reserve the line
+   * while the verdict is still in flight.
+   */
+  reason?: string;
+  /** Reserves the reason line even before a verdict exists. */
+  showReason?: boolean;
 };
 
 /**
@@ -24,7 +40,12 @@ type Props = {
  * and the search screen re-renders on every keystroke. Without it, typing
  * re-renders every visible card and the list stutters on a mid-range Android.
  */
-export const EventCard = memo(function EventCard({ event, accessory }: Props) {
+export const EventCard = memo(function EventCard({
+  event,
+  accessory,
+  reason,
+  showReason = false,
+}: Props) {
   const theme = useTheme();
   const price = formatPrice(event.price);
 
@@ -37,6 +58,7 @@ export const EventCard = memo(function EventCard({ event, accessory }: Props) {
       <Pressable
         style={({ pressed }) => [
           styles.card,
+          showReason && styles.cardRanked,
           { backgroundColor: pressed ? theme.backgroundSelected : theme.backgroundElement },
         ]}>
         <Image
@@ -61,6 +83,14 @@ export const EventCard = memo(function EventCard({ event, accessory }: Props) {
             {price ? ` · ${price}` : ''}
           </ThemedText>
           <SourceBadges event={event} />
+
+          {showReason ? (
+            // Why this event is where it is. Without it an odd ranking is just
+            // mysterious; with it, it's something you can go and fix.
+            <ThemedText type="small" themeColor="textSecondary" numberOfLines={1} style={styles.reason}>
+              {reason ? reason : 'Ranking…'}
+            </ThemedText>
+          ) : null}
         </View>
 
         {accessory ? <View style={styles.accessory}>{accessory}</View> : null}
@@ -70,6 +100,13 @@ export const EventCard = memo(function EventCard({ event, accessory }: Props) {
 });
 
 const styles = StyleSheet.create({
+  cardRanked: {
+    height: EVENT_CARD_HEIGHT_RANKED,
+  },
+  reason: {
+    fontSize: 11,
+    lineHeight: 15,
+  },
   card: {
     height: EVENT_CARD_HEIGHT,
     flexDirection: 'row',

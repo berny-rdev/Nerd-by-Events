@@ -318,3 +318,74 @@ describe('rankEvents caching', () => {
     expect(result.events[0].band).toBe('WEAK');
   });
 });
+
+describe('rankEvents progressive delivery', () => {
+  it('publishes each batch as it lands, not only at the end', async () => {
+    const events = makeEvents(45);
+    mockedClassify.mockImplementation(async (_p, batch) =>
+      batch.map((event) => ({ id: event.id, band: 'STRONG' as const, reason: 'yes' })),
+    );
+
+    const emissions: number[] = [];
+    await rankEvents({
+      events,
+      profile: PROFILE,
+      onVerdicts: (batch) => emissions.push(batch.length),
+    });
+
+    // Three batches -> three emissions. Without this the list would flip from
+    // wholly unranked to wholly ranked in one frame.
+    expect(emissions).toEqual([20, 20, 5]);
+  });
+
+  it('publishes cached verdicts immediately, before any network work', async () => {
+    const events = makeEvents(3);
+    mockedClassify.mockImplementation(async (_p, batch) =>
+      batch.map((event) => ({ id: event.id, band: 'STRONG' as const, reason: 'yes' })),
+    );
+    await rankEvents({ events, profile: PROFILE });
+    mockedClassify.mockClear();
+
+    const emissions: string[][] = [];
+    await rankEvents({
+      events,
+      profile: PROFILE,
+      onVerdicts: (batch) => emissions.push(batch.map((v) => v.id)),
+    });
+
+    expect(mockedClassify).not.toHaveBeenCalled();
+    // A fully cached search should paint ranked immediately rather than
+    // showing every row as "Ranking…" until the promise settles.
+    expect(emissions).toHaveLength(1);
+    expect(emissions[0].sort()).toEqual(events.map((e) => e.id).sort());
+  });
+
+  it('emits nothing for a batch that failed', async () => {
+    const events = makeEvents(25);
+    mockedClassify.mockImplementation(async (_p, batch) => {
+      if (batch.length === 5) throw new Error('down');
+      return batch.map((event) => ({ id: event.id, band: 'WEAK' as const, reason: 'x' }));
+    });
+
+    const emissions: number[] = [];
+    await rankEvents({
+      events,
+      profile: PROFILE,
+      onVerdicts: (batch) => emissions.push(batch.length),
+    });
+
+    expect(emissions).toEqual([20]);
+  });
+
+  it('is optional — omitting it changes nothing', async () => {
+    const events = makeEvents(2);
+    mockedClassify.mockResolvedValue([
+      { id: events[0].id, band: 'STRONG', reason: 'a' },
+      { id: events[1].id, band: 'WEAK', reason: 'b' },
+    ]);
+
+    const result = await rankEvents({ events, profile: PROFILE });
+
+    expect(result.events.map((e) => e.band)).toEqual(['STRONG', 'WEAK']);
+  });
+});

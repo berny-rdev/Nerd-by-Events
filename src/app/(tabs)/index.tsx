@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react';
 import { FlatList, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { EventCard, EVENT_CARD_HEIGHT } from '@/components/event-card';
+import { EventCard, EVENT_CARD_HEIGHT, EVENT_CARD_HEIGHT_RANKED } from '@/components/event-card';
+import { DIVIDER_HEIGHT, RelevanceDivider } from '@/components/relevance-divider';
 import { ExpansionStrip } from '@/components/expansion-strip';
 import { EmptyState, ErrorState, LoadingState } from '@/components/state-views';
 import { ThemedText } from '@/components/themed-text';
@@ -11,10 +12,11 @@ import { Spacing } from '@/constants/theme';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
 import { useEvents } from '@/hooks/use-events';
 import { useExpansion } from '@/hooks/use-expansion';
+import { useRanking } from '@/hooks/use-ranking';
+import { buildRows, type ListRow } from '@/rank/sort';
 import { useSavedEvents, useToggleSave } from '@/hooks/use-saved-events';
 import { config } from '@/lib/config';
 import { useTheme } from '@/hooks/use-theme';
-import type { Event } from '@/sources/types';
 
 export default function BrowseScreen() {
   const theme = useTheme();
@@ -58,25 +60,61 @@ export default function BrowseScreen() {
     [saved],
   );
 
-  const events = data?.events ?? [];
+  const events = useMemo(() => data?.events ?? [], [data]);
   const duplicatesRemoved = (data?.rawCount ?? 0) - events.length;
 
-  const renderItem = ({ item }: { item: Event }) => (
-    <EventCard
-      event={item}
-      accessory={
-        <Pressable
-          hitSlop={12}
-          onPress={() => toggle(item)}
-          accessibilityRole="button"
-          accessibilityLabel={savedIds.has(item.id) ? 'Remove from saved' : 'Save event'}>
-          <ThemedText type="subtitle" style={styles.heart}>
-            {savedIds.has(item.id) ? '♥' : '♡'}
-          </ThemedText>
-        </Pressable>
-      }
-    />
+  // Ranking runs alongside the list, never in front of it. `ranking.events` is
+  // always every fetched event — carrying real verdicts where they've arrived
+  // and the lowest band where they haven't — so there is no state in which the
+  // list has fewer rows than the fan-out returned.
+  const ranking = useRanking(events, expansion.profile);
+
+  // Reserve the reason line for the whole list as soon as a profile exists, so
+  // rows don't change height as bands fill in underneath the user's thumb.
+  const showReason = Boolean(expansion.profile);
+  const cardHeight = showReason ? EVENT_CARD_HEIGHT_RANKED : EVENT_CARD_HEIGHT;
+
+  // Sort and insert the break only once real verdicts exist. Before that the
+  // fan-out's own order is the honest one.
+  const rows = useMemo(
+    () => buildRows(ranking.events, ranking.hasVerdicts),
+    [ranking.events, ranking.hasVerdicts],
   );
+
+  // Two fixed row heights, so getItemLayout survives the divider.
+  const rowOffsets = useMemo(() => {
+    const offsets: number[] = [];
+    let running = 0;
+    for (const row of rows) {
+      offsets.push(running);
+      running += (row.type === 'divider' ? DIVIDER_HEIGHT : cardHeight) + Spacing.two;
+    }
+    return offsets;
+  }, [rows, cardHeight]);
+
+  const renderItem = ({ item }: { item: ListRow }) => {
+    if (item.type === 'divider') return <RelevanceDivider below={item.below} />;
+
+    const event = item.event;
+    return (
+      <EventCard
+        event={event}
+        showReason={showReason}
+        reason={event.isRanked ? event.reason : ''}
+        accessory={
+          <Pressable
+            hitSlop={12}
+            onPress={() => toggle(event)}
+            accessibilityRole="button"
+            accessibilityLabel={savedIds.has(event.id) ? 'Remove from saved' : 'Save event'}>
+            <ThemedText type="subtitle" style={styles.heart}>
+              {savedIds.has(event.id) ? '♥' : '♡'}
+            </ThemedText>
+          </Pressable>
+        }
+      />
+    );
+  };
 
   return (
     <ThemedView style={styles.screen}>
@@ -123,23 +161,31 @@ export default function BrowseScreen() {
             it can never replace or delay what's below it. */}
         <ExpansionStrip {...expansion} isSearching={isFetching} />
 
+        <RankingBanner
+          isRanking={ranking.isRanking}
+          failed={Boolean(expansion.profile) && !ranking.isRanking && !ranking.isRanked && events.length > 0}
+        />
+
         {isLoading ? (
           <LoadingState />
         ) : isError ? (
           <ErrorState error={error} onRetry={() => refetch()} />
         ) : (
           <FlatList
-            data={events}
+            data={rows}
             renderItem={renderItem}
             // Ids are already namespaced by source, so they're unique across
             // providers. Without a stable key, React remounts every row on
             // refetch and images re-download.
-            keyExtractor={(item) => item.id}
-            // Cards are a fixed height, so FlatList can compute offsets
-            // instead of measuring — this is what keeps fast scrolling smooth.
+            keyExtractor={(item) =>
+              item.type === 'divider' ? 'relevance-divider' : item.event.id
+            }
+            // Row heights are still fixed — two of them now — so offsets stay
+            // precomputable and fast scrolling doesn't have to measure.
             getItemLayout={(_, index) => ({
-              length: EVENT_CARD_HEIGHT + Spacing.two,
-              offset: (EVENT_CARD_HEIGHT + Spacing.two) * index,
+              length:
+                (rows[index]?.type === 'divider' ? DIVIDER_HEIGHT : cardHeight) + Spacing.two,
+              offset: rowOffsets[index] ?? 0,
               index,
             })}
             contentContainerStyle={styles.list}
@@ -244,8 +290,31 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingTop: Spacing.three,
   },
+  banner: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
   heart: {
     fontSize: 24,
     lineHeight: 30,
   },
 });
+
+/**
+ * Ranking status, shown above the list and never in place of it.
+ *
+ * The failure case is the important one: when nothing could be classified the
+ * list stays exactly as the fan-out returned it, and this says so rather than
+ * leaving the user wondering why the order looks arbitrary.
+ */
+function RankingBanner({ isRanking, failed }: { isRanking: boolean; failed: boolean }) {
+  if (!isRanking && !failed) return null;
+
+  return (
+    <ThemedText type="small" themeColor="textSecondary" style={styles.banner}>
+      {isRanking
+        ? 'Ranking results…'
+        : 'Ranking unavailable — showing results in the order they were found.'}
+    </ThemedText>
+  );
+}

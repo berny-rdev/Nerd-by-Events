@@ -77,9 +77,22 @@ export type RankQuery = {
   events: Event[];
   profile: ExpansionProfile | undefined;
   signal?: AbortSignal;
+  /**
+   * Called as verdicts become available, before the whole run finishes.
+   *
+   * This is what makes the list fill in progressively rather than flipping from
+   * wholly unranked to wholly ranked. It fires once for the cache hits (so those
+   * land immediately) and once per classify batch as each returns.
+   */
+  onVerdicts?: (verdicts: RawVerdict[]) => void;
 };
 
-export async function rankEvents({ events, profile, signal }: RankQuery): Promise<RankResult> {
+export async function rankEvents({
+  events,
+  profile,
+  signal,
+  onVerdicts,
+}: RankQuery): Promise<RankResult> {
   if (events.length === 0) {
     return { events: [], failures: [], skipped: [], isRanked: false };
   }
@@ -95,6 +108,10 @@ export async function rankEvents({ events, profile, signal }: RankQuery): Promis
     events.map((event) => event.id),
   );
   const pending = events.filter((event) => !cached.has(event.id));
+
+  if (cached.size > 0) {
+    onVerdicts?.([...cached].map(([id, verdict]) => ({ id, ...verdict })));
+  }
 
   // Everything already known — no network at all.
   if (pending.length === 0) {
@@ -134,6 +151,7 @@ export async function rankEvents({ events, profile, signal }: RankQuery): Promis
     }
 
     for (const verdict of result.value) fresh.set(verdict.id, verdict);
+    if (result.value.length > 0) onVerdicts?.(result.value);
   });
 
   // Cache only real verdicts. A fallback band is a harness outcome, and storing
