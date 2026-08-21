@@ -573,3 +573,89 @@ describe('searchEvents failure diagnosability', () => {
     expect(failure?.sampleQueries).toHaveLength(3);
   });
 });
+
+describe('searchEvents unconfigured sources', () => {
+  const NAMES = ['Hatsune Miku', 'Ado'];
+
+  /** What the Worker sends when a source's secret is missing. */
+  const notConfigured = () =>
+    new HttpError(
+      503,
+      'https://proxy.test/seatgeek/events',
+      JSON.stringify({ error: 'Worker is missing SEATGEEK_CLIENT_ID', code: 'not_configured' }),
+    );
+
+  it('reports a source with no secret as skipped, not failed', async () => {
+    mocked(seatgeek).search.mockRejectedValue(notConfigured());
+
+    const result = await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    // The pre-migration behaviour: unconfigured reads as unconfigured.
+    expect(result.skipped.map((s) => s.source)).toContain('seatgeek');
+    expect(result.failures.map((f) => f.source)).not.toContain('seatgeek');
+  });
+
+  it('keeps the label so the notice line still names it', async () => {
+    mocked(serpapi).search.mockRejectedValue(notConfigured());
+
+    const result = await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    expect(result.skipped).toContainEqual({ source: 'serpapi', label: 'Google Events' });
+  });
+
+  it('still returns the sources that are configured', async () => {
+    mocked(seatgeek).search.mockRejectedValue(notConfigured());
+    mocked(serpapi).search.mockRejectedValue(notConfigured());
+    mocked(ticketmaster).search.mockResolvedValue([
+      makeEvent({ source: 'ticketmaster', title: 'Radiohead' }),
+    ]);
+
+    const result = await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    expect(result.events).toHaveLength(1);
+    expect(result.skipped.map((s) => s.source).sort()).toEqual(['seatgeek', 'serpapi']);
+    expect(result.failures).toEqual([]);
+  });
+
+  it('does not confuse a genuine upstream failure with an unconfigured source', async () => {
+    mocked(seatgeek).search.mockRejectedValue(
+      new HttpError(502, 'https://proxy.test/seatgeek/events', JSON.stringify({ status: 503 })),
+    );
+
+    const result = await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    expect(result.failures.map((f) => f.source)).toContain('seatgeek');
+    expect(result.skipped.map((s) => s.source)).not.toContain('seatgeek');
+  });
+
+  it('treats a partial not-configured count as a failure, not a skip', async () => {
+    // Only explicable by a redeploy mid-search. Reporting it as "skipped" would
+    // hide that most of the source's queries did run.
+    let call = 0;
+    mocked(seatgeek).search.mockImplementation(async () => {
+      call += 1;
+      if (call === 1) throw notConfigured();
+      return [];
+    });
+
+    const result = await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    expect(result.skipped.map((s) => s.source)).not.toContain('seatgeek');
+    const failure = result.failures.find((f) => f.source === 'seatgeek');
+    expect(failure?.message).toBe('Not configured');
+    expect(failure?.failedQueries).toBe(1);
+  });
+
+  it('ignores a body that merely looks like the code', async () => {
+    mocked(seatgeek).search.mockRejectedValue(
+      new HttpError(502, 'https://proxy.test/seatgeek/events', 'not_configured'),
+    );
+
+    const result = await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    // A bare string is not the structured signal — treating it as one would let
+    // an upstream error page masquerade as a configuration state.
+    expect(result.skipped.map((s) => s.source)).not.toContain('seatgeek');
+    expect(result.failures.map((f) => f.source)).toContain('seatgeek');
+  });
+});

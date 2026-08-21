@@ -1,6 +1,6 @@
 import { CACHE_TTL, cacheKey, cacheableJson } from '../lib/cache.ts';
 import { canonicalQuery } from '../lib/hash.ts';
-import { HttpError, json, readJsonBody } from '../lib/http.ts';
+import { HttpError, json, missingSecret, readJsonBody } from '../lib/http.ts';
 import { MODELS, parseJsonText } from '../model.ts';
 import { EXPANSION_SYSTEM, buildExpansionUser } from '../prompts.ts';
 import { MAX_ADJACENT, parseExpansion } from '../schema.ts';
@@ -36,9 +36,7 @@ const MAX_TOKENS = 16_000;
  * 30-day TTL on every previously cached query.
  */
 export async function expand(request: Request, env: Env, deps: Deps): Promise<Response> {
-  if (!env.ANTHROPIC_API_KEY) {
-    throw new HttpError(500, 'Worker is missing ANTHROPIC_API_KEY');
-  }
+  if (!env.ANTHROPIC_API_KEY) missingSecret('ANTHROPIC_API_KEY');
 
   const body = await readJsonBody(request);
   const rawQuery = (body as { query?: unknown })?.query;

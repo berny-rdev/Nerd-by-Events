@@ -1,5 +1,13 @@
-import { useMemo, useState } from 'react';
-import { FlatList, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { useCallback, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  FlatList,
+  Platform,
+  Pressable,
+  StyleSheet,
+  TextInput,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { EventCard, EVENT_CARD_HEIGHT, EVENT_CARD_HEIGHT_RANKED } from '@/components/event-card';
@@ -12,6 +20,9 @@ import { Spacing } from '@/constants/theme';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
 import { useEvents } from '@/hooks/use-events';
 import { useExpansion } from '@/hooks/use-expansion';
+import Ionicons from '@expo/vector-icons/Ionicons';
+
+import { useNearMe } from '@/hooks/use-near-me';
 import { useRanking } from '@/hooks/use-ranking';
 import { buildRows, type ListRow } from '@/rank/sort';
 import { useSavedEvents, useToggleSave } from '@/hooks/use-saved-events';
@@ -31,6 +42,10 @@ export default function BrowseScreen() {
    * keystroke the way the debounced keyword search does.
    */
   const [submitted, setSubmitted] = useState('');
+
+  // Location only ever fills the city field — it never becomes a separate
+  // search mode, so nothing downstream has to know it was used.
+  const nearMe = useNearMe(useCallback((found: string) => setCity(found), []));
 
   // Debounce the *inputs*, not the request. The query key derives from these,
   // so a settled value is what actually triggers a fetch.
@@ -140,19 +155,50 @@ export default function BrowseScreen() {
                 { backgroundColor: theme.backgroundElement, color: theme.text },
               ]}
             />
-            <TextInput
-              value={city}
-              onChangeText={setCity}
-              placeholder="City"
-              placeholderTextColor={theme.textSecondary}
-              autoCorrect={false}
-              style={[
-                styles.input,
-                styles.cityInput,
-                { backgroundColor: theme.backgroundElement, color: theme.text },
-              ]}
-            />
+            <View style={[styles.cityField, { backgroundColor: theme.backgroundElement }]}>
+              <TextInput
+                value={city}
+                onChangeText={setCity}
+                placeholder="City"
+                placeholderTextColor={theme.textSecondary}
+                autoCorrect={false}
+                // Never disabled, in any location state. Typing is the primary
+                // path; the button is only a shortcut for it.
+                style={[styles.cityInput, { color: theme.text }]}
+              />
+              <Pressable
+                onPress={nearMe.locate}
+                disabled={nearMe.status.kind === 'locating'}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Use my location"
+                style={styles.nearMe}>
+                {nearMe.status.kind === 'locating' ? (
+                  <ActivityIndicator size="small" color={theme.textSecondary} />
+                ) : (
+                  <Ionicons name="locate-outline" size={18} color={theme.textSecondary} />
+                )}
+              </Pressable>
+            </View>
           </View>
+
+          {nearMe.status.kind === 'note' ? (
+            <View style={styles.locationNote}>
+              <ThemedText type="small" themeColor="textSecondary" style={styles.locationNoteText}>
+                {nearMe.status.message}
+              </ThemedText>
+              {nearMe.status.canOpenSettings ? (
+                <Pressable onPress={nearMe.openSettings} hitSlop={8}>
+                  <ThemedText type="linkPrimary">Settings</ThemedText>
+                </Pressable>
+              ) : null}
+              <Pressable onPress={nearMe.dismiss} hitSlop={8} accessibilityLabel="Dismiss">
+                <ThemedText type="small" themeColor="textSecondary">
+                  Dismiss
+                </ThemedText>
+              </Pressable>
+            </View>
+          ) : null}
 
           <SourceNotices data={data} />
         </View>
@@ -279,7 +325,30 @@ const styles = StyleSheet.create({
     paddingVertical: Platform.select({ ios: Spacing.two + 2, default: Spacing.one }),
     fontSize: 16,
   },
-  cityInput: { flex: 1 },
+  cityField: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: Spacing.three,
+    paddingRight: Spacing.two,
+  },
+  cityInput: {
+    flex: 1,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Platform.select({ ios: Spacing.two + 2, default: Spacing.one }),
+    fontSize: 16,
+  },
+  nearMe: {
+    width: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  locationNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  locationNoteText: { flex: 1 },
   notices: { gap: 1 },
   list: {
     padding: Spacing.three,

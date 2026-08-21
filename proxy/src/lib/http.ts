@@ -53,3 +53,22 @@ export function cleanString(value: unknown, maxLength: number): string {
   if (typeof value !== 'string') return '';
   return value.replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
+
+/**
+ * Body `code` marking "this source has no secret configured".
+ *
+ * A missing secret is not an upstream failure and must not read like one. The
+ * app keys on this to put the source in its *skipped* list — the way an
+ * unconfigured source behaved before the keys moved onto the Worker — rather
+ * than reporting it as a provider that broke.
+ */
+export const NOT_CONFIGURED = 'not_configured';
+
+/**
+ * 503 rather than 500: the route genuinely cannot serve, and it must be
+ * distinguishable from 502 (upstream said no) and 500 (we have a bug). The
+ * status alone is advisory — `code` is what the app actually branches on.
+ */
+export function missingSecret(secret: string): never {
+  throw new HttpError(503, `Worker is missing ${secret}`, { code: NOT_CONFIGURED, secret });
+}

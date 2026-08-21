@@ -127,3 +127,20 @@ export async function cancelReminder(reminderId?: string): Promise<void> {
   // so there's nothing to guard against here.
   await Notifications.cancelScheduledNotificationAsync(reminderId);
 }
+
+/**
+ * Pulls the event id out of a notification response.
+ *
+ * Defensive because this payload crossed a process boundary: the OS serialized
+ * it when the reminder was scheduled — possibly days ago, possibly by an older
+ * build of the app — and handed it back. It is data, not a type.
+ */
+export function eventIdFromResponse(
+  response: Notifications.NotificationResponse | null | undefined,
+): string | null {
+  const data = response?.notification?.request?.content?.data;
+  if (typeof data !== 'object' || data === null) return null;
+
+  const eventId = (data as Record<string, unknown>).eventId;
+  return typeof eventId === 'string' && eventId.length > 0 ? eventId : null;
+}

@@ -10,7 +10,7 @@
  */
 
 import { mapWithConcurrency } from '@/lib/concurrency';
-import { HttpError } from '@/lib/http';
+import { HttpError, isNotConfiguredError } from '@/lib/http';
 import { dedupeEvents } from './dedupe';
 import { budgetFor, buildQueries } from './plan';
 import { seatgeek } from './seatgeek';
@@ -96,6 +96,14 @@ export async function searchEvents(query: AggregateQuery): Promise<SearchResult>
   const { keyword = '', city, names = [], signal } = query;
 
   const configured = sources.filter((source) => source.isConfigured());
+
+  /**
+   * Sources the app can rule out before calling: no Worker URL at all.
+   *
+   * A source whose *own* secret is missing can't be detected here — every
+   * source's isConfigured() is the same "is the proxy URL set" check now — so
+   * that case is discovered from the responses below.
+   */
   const skipped = sources
     .filter((source) => !source.isConfigured())
     .map((source) => ({ source: source.id, label: source.label }));
@@ -117,6 +125,8 @@ export async function searchEvents(query: AggregateQuery): Promise<SearchResult>
   );
 
   const events: Event[] = [];
+  /** Per source: queries that came back "no secret configured". */
+  const unconfigured = new Map<SourceId, number>();
   /** Per source: how many queries failed, and the first error seen. */
   const failuresBySource = new Map<
     SourceId,
@@ -155,6 +165,12 @@ export async function searchEvents(query: AggregateQuery): Promise<SearchResult>
     const { source, keyword } = tasks[index];
 
     if (result.status === 'rejected') {
+      // "Never set up" is not "broke". Counted separately so it can be reported
+      // as skipped rather than as a provider that failed.
+      if (isNotConfiguredError(result.reason)) {
+        unconfigured.set(source.id, (unconfigured.get(source.id) ?? 0) + 1);
+        return;
+      }
       record(source, keyword, describeError(result.reason));
       return;
     }
@@ -176,6 +192,25 @@ export async function searchEvents(query: AggregateQuery): Promise<SearchResult>
 
     events.push(...(value as Event[]));
   });
+
+  /**
+   * A missing secret fails every one of that source's queries identically, so
+   * "all of them" is the signal that it is unconfigured rather than flaky. A
+   * partial count would mean something stranger — a redeploy mid-search — and
+   * is reported as a failure so it stays visible.
+   */
+  for (const [source, count] of unconfigured) {
+    const entry = configured.find((candidate) => candidate.id === source);
+    if (!entry) continue;
+
+    if (count >= (attempted.get(source) ?? count)) {
+      skipped.push({ source, label: entry.label });
+    } else {
+      record(entry, '', { message: 'Not configured', isAuthError: false });
+      const failure = failuresBySource.get(source);
+      if (failure) failure.count = count;
+    }
+  }
 
   const failures: SourceFailure[] = [...failuresBySource].map(([source, entry]) => ({
     source,

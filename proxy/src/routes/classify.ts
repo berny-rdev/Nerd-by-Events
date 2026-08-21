@@ -1,6 +1,6 @@
 import { CACHE_TTL, cacheKey, cacheableJson } from '../lib/cache.ts';
 import { shortHash } from '../lib/hash.ts';
-import { HttpError, cleanString, json, readJsonBody } from '../lib/http.ts';
+import { HttpError, cleanString, json, missingSecret, readJsonBody } from '../lib/http.ts';
 import { MODELS, parseJsonText } from '../model.ts';
 import { buildClassifySystem, buildClassifyUser } from '../prompts.ts';
 import { allUnresolved, parseProfileInput, parseVerdicts } from '../schema.ts';
@@ -69,9 +69,7 @@ function parseEvents(value: unknown): ClassifyEvent[] {
  * gets N verdicts back; anything that couldn't be judged comes back UNRELATED.
  */
 export async function classify(request: Request, env: Env, deps: Deps): Promise<Response> {
-  if (!env.ANTHROPIC_API_KEY) {
-    throw new HttpError(500, 'Worker is missing ANTHROPIC_API_KEY');
-  }
+  if (!env.ANTHROPIC_API_KEY) missingSecret('ANTHROPIC_API_KEY');
 
   const body = await readJsonBody(request);
   const profile = parseProfileInput((body as { profile?: unknown })?.profile);

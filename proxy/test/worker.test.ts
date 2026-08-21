@@ -818,8 +818,14 @@ test('a missing secret is reported, not leaked', async () => {
     makeEnv({ TICKETMASTER_API_KEY: '' }),
     h.deps,
   );
-  assert.equal(response.status, 500);
-  assert.match((await bodyOf(response)).error, /TICKETMASTER_API_KEY/);
+  // 503 + a machine-readable code, so the app can call this "unconfigured"
+  // rather than "the provider broke". The name is still surfaced for whoever
+  // has to go and set it, but never the value.
+  assert.equal(response.status, 503);
+  const body = await bodyOf(response);
+  assert.equal(body.code, 'not_configured');
+  assert.match(body.error, /TICKETMASTER_API_KEY/);
+  assert.doesNotMatch(JSON.stringify(body), /test-tm/);
 });
 
 // --------------------------------------------------------------- transport
@@ -965,4 +971,54 @@ test('special characters survive the app -> worker -> upstream hop intact', asyn
     const sent = new URL(h.upstreamCalls[0]).searchParams.get('keyword');
     assert.equal(sent, keyword, `keyword mangled: ${keyword} -> ${sent}`);
   }
+});
+
+// --------------------------------------------------- missing-secret handling
+
+test('a missing source secret reports as not-configured, not an upstream error', async () => {
+  const h = makeHarness();
+  h.setUpstream(() => new Response('{"events":[]}', { status: 200 }));
+
+  for (const [path, env] of [
+    ['/seatgeek/events?keyword=x', makeEnv({ SEATGEEK_CLIENT_ID: '' })],
+    ['/serpapi/events?q=x', makeEnv({ SERPAPI_API_KEY: '' })],
+    ['/ticketmaster/events?keyword=x', makeEnv({ TICKETMASTER_API_KEY: '' })],
+  ] as const) {
+    const response = await handleRequest(get(path), env, h.deps);
+    const body = await bodyOf(response);
+
+    // 502 would say "the provider broke". This says "it was never set up".
+    assert.equal(response.status, 503, path);
+    assert.equal(body.code, 'not_configured', path);
+    assert.notEqual(response.status, 502, path);
+  }
+
+  assert.equal(h.upstreamCalls.length, 0, 'must not call upstream without a secret');
+});
+
+test('the model routes use the same not-configured signal', async () => {
+  const h = makeHarness();
+  const env = makeEnv({ ANTHROPIC_API_KEY: '' });
+
+  const expanded = await handleRequest(post('/expand', { query: 'x' }), env, h.deps);
+  const classified = await handleRequest(
+    post('/classify', { profile: GOOD_PROFILE, events: EVENTS }),
+    env,
+    h.deps,
+  );
+
+  assert.equal((await bodyOf(expanded)).code, 'not_configured');
+  assert.equal((await bodyOf(classified)).code, 'not_configured');
+  assert.equal(h.modelCalls.length, 0);
+});
+
+test('a configured source that breaks is still a 502, not not-configured', async () => {
+  const h = makeHarness();
+  h.setUpstream(() => new Response('upstream exploded', { status: 500 }));
+
+  const response = await handleRequest(get('/seatgeek/events?keyword=x'), makeEnv(), h.deps);
+  const body = await bodyOf(response);
+
+  assert.equal(response.status, 502);
+  assert.equal(body.code, undefined);
 });

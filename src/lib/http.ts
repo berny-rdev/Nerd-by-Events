@@ -75,3 +75,28 @@ export function buildUrl(base: string, params: Record<string, string | number | 
   const qs = search.toString();
   return qs ? `${base}?${qs}` : base;
 }
+
+/**
+ * Body `code` the Worker uses to mean "this source has no secret configured".
+ *
+ * Mirrors `NOT_CONFIGURED` in `proxy/src/lib/http.ts`. Every source's
+ * `isConfigured()` is now just "is the Worker URL set", so the app cannot know
+ * a *particular* source lacks its key until the Worker says so — this is how it
+ * finds out.
+ */
+export const NOT_CONFIGURED = 'not_configured';
+
+/** True when a failure means "never set up" rather than "broke just now". */
+export function isNotConfiguredError(error: unknown): boolean {
+  if (!(error instanceof HttpError)) return false;
+  try {
+    const parsed: unknown = JSON.parse(error.body);
+    return (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      (parsed as { code?: unknown }).code === NOT_CONFIGURED
+    );
+  } catch {
+    return false;
+  }
+}

@@ -12,7 +12,7 @@
  */
 
 import { CACHE_TTL, cacheKey, cacheableJson } from '../lib/cache.ts';
-import { HttpError, json } from '../lib/http.ts';
+import { HttpError, json, missingSecret } from '../lib/http.ts';
 import type { Deps, Env } from '../types.ts';
 
 const MAX_LIMIT = 50;
@@ -121,9 +121,7 @@ async function proxied(
 // ------------------------------------------------------------- ticketmaster
 
 export function ticketmaster(request: Request, env: Env, deps: Deps): Promise<Response> {
-  if (!env.TICKETMASTER_API_KEY) {
-    throw new HttpError(500, 'Worker is missing TICKETMASTER_API_KEY');
-  }
+  if (!env.TICKETMASTER_API_KEY) missingSecret('TICKETMASTER_API_KEY');
 
   const url = new URL(request.url);
   const keyword = term(url, 'keyword');
@@ -154,9 +152,7 @@ export function ticketmaster(request: Request, env: Env, deps: Deps): Promise<Re
 // ----------------------------------------------------------------- seatgeek
 
 export function seatgeek(request: Request, env: Env, deps: Deps): Promise<Response> {
-  if (!env.SEATGEEK_CLIENT_ID) {
-    throw new HttpError(500, 'Worker is missing SEATGEEK_CLIENT_ID');
-  }
+  if (!env.SEATGEEK_CLIENT_ID) missingSecret('SEATGEEK_CLIENT_ID');
 
   const url = new URL(request.url);
   const keyword = term(url, 'keyword');
@@ -188,9 +184,7 @@ export function seatgeek(request: Request, env: Env, deps: Deps): Promise<Respon
 // ------------------------------------------------------------------ serpapi
 
 export function serpapi(request: Request, env: Env, deps: Deps): Promise<Response> {
-  if (!env.SERPAPI_API_KEY) {
-    throw new HttpError(500, 'Worker is missing SERPAPI_API_KEY');
-  }
+  if (!env.SERPAPI_API_KEY) missingSecret('SERPAPI_API_KEY');
 
   const url = new URL(request.url);
   const q = term(url, 'q');

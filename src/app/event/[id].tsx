@@ -5,7 +5,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { ExternalLink } from '@/components/external-link';
 import { SourceBadges } from '@/components/source-badge';
-import { EmptyState } from '@/components/state-views';
+import { EmptyState, LoadingState } from '@/components/state-views';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
@@ -23,22 +23,42 @@ export default function EventDetailScreen() {
   // number, you get a string here.
   const { id } = useLocalSearchParams<{ id: string }>();
 
-  // Resolve the id against caches rather than refetching. Search results are
-  // already in the Query cache; saved events cover the case where the user
-  // opened this from the Saved tab with no network.
+  /**
+   * Resolve the id against caches rather than refetching.
+   *
+   * Deliberately no refetch-by-id, including on a cold start from a reminder
+   * tap. Three reasons:
+   *
+   *  - A reminder only exists for a *saved* event — `useToggleSave` schedules
+   *    on save and cancels on unsave — and saved events persist the whole
+   *    record, not just an id. So the store is guaranteed to have it.
+   *  - SerpAPI has no fetch-by-id endpoint at all, so a refetch path would work
+   *    for two sources out of three and quietly fail for the third.
+   *  - A reminder fires an hour before a show, which is exactly when someone is
+   *    most likely to be out and on a bad connection. Reading local storage
+   *    works there; a network round trip may not.
+   */
   const fromSearch = useCachedEvent(id);
-  const { data: saved } = useSavedEvents();
+  const { data: saved, isPending: savedPending } = useSavedEvents();
   const event = fromSearch ?? saved?.find((item) => item.id === id);
 
   const isSaved = useIsSaved(id);
   const { toggle, isPending } = useToggleSave();
   const [reminderNote, setReminderNote] = useState<string | null>(null);
 
+  // The saved store is read asynchronously, so on a cold start it is still
+  // pending for the first frames. Without this the user taps a reminder and is
+  // greeted by "Event not available" before the read resolves — the empty state
+  // must mean "absent", not "not yet loaded".
+  if (!event && savedPending) {
+    return <LoadingState label="Opening event…" />;
+  }
+
   if (!event) {
     return (
       <EmptyState
         title="Event not available"
-        body="Search results expire from the cache. Go back and search again."
+        body="This event is no longer saved and isn't in recent search results. Search for it again to see it."
       />
     );
   }
