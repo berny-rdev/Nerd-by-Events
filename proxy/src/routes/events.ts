@@ -28,6 +28,50 @@ function limitOf(url: URL): number {
   return Math.min(MAX_LIMIT, Math.max(1, Math.trunc(raw)));
 }
 
+/**
+ * Upstream statuses worth trying again.
+ *
+ * 429 is the one that matters: Ticketmaster enforces a **5 requests/second**
+ * spike arrest, and a single fan-out sends it 25 queries. Verified against the
+ * live API — a 25-query burst produced two 429s reading
+ * `Spike arrest violation. Allowed rate: MessageRate{messagesPerPeriod=5,
+ * periodInMicroseconds=1000000}`, which this route was turning into a 502.
+ */
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const MAX_ATTEMPTS = 3;
+/** Base delays; actual waits add up to 100% jitter on top. */
+const BACKOFF_MS = [250, 700];
+
+/**
+ * Fetches with backoff on a retryable status.
+ *
+ * The jitter is load-bearing, not decoration. A fan-out arrives as ~25 near
+ * simultaneous Worker invocations; if they all backed off by the same fixed
+ * amount they would retry in lockstep and trip the same per-second limit again.
+ */
+async function fetchWithRetry(
+  deps: Deps,
+  url: string,
+  label: string,
+): Promise<{ response: Response; attempts: number }> {
+  let response = await deps.upstreamFetch(url, { headers: { Accept: 'application/json' } });
+
+  for (let attempt = 1; attempt < MAX_ATTEMPTS && !response.ok; attempt++) {
+    if (!RETRYABLE_STATUS.has(response.status)) break;
+
+    const base = BACKOFF_MS[attempt - 1] ?? BACKOFF_MS[BACKOFF_MS.length - 1];
+    console.warn(
+      `[upstream] retrying ${label} after ${response.status} (attempt ${attempt + 1}/${MAX_ATTEMPTS})`,
+    );
+    await deps.sleep(base + Math.random() * base);
+
+    response = await deps.upstreamFetch(url, { headers: { Accept: 'application/json' } });
+    if (response.ok) return { response, attempts: attempt + 1 };
+  }
+
+  return { response, attempts: 1 };
+}
+
 /** Shared cache-then-fetch wrapper. `build` returns the upstream URL. */
 async function proxied(
   request: Request,
@@ -52,14 +96,17 @@ async function proxied(
     });
   }
 
-  const response = await deps.upstreamFetch(options.upstream, {
-    headers: { Accept: 'application/json' },
-  });
+  const label = `${options.namespace} ${JSON.stringify(options.identity)}`;
+  const { response } = await fetchWithRetry(deps, options.upstream, label);
 
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
+    // Log the *query*, not just the status — otherwise a partial fan-out
+    // failure is invisible and the cause has to be guessed at.
+    console.error(`[upstream] ${label} failed with ${response.status}: ${detail.slice(0, 200)}`);
     throw new HttpError(502, 'Upstream error', {
       status: response.status,
+      query: options.identity,
       detail: detail.slice(0, 500),
     });
   }

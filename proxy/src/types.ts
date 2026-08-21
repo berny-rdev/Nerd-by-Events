@@ -68,6 +68,8 @@ export type Deps = {
   callModel: (env: Env, request: ModelRequest) => Promise<ModelResult>;
   /** Used for the three upstream event APIs. Injected so tests never hit the network. */
   upstreamFetch: typeof fetch;
+  /** Injected so retry backoff is instant under test instead of real seconds. */
+  sleep: (ms: number) => Promise<void>;
   rateLimiter: RateLimiter;
 };
 

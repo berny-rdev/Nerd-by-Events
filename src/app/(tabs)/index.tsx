@@ -35,17 +35,20 @@ export default function BrowseScreen() {
   const debouncedKeyword = useDebouncedValue(keyword);
   const debouncedCity = useDebouncedValue(city);
 
-  // The keyword search is already in flight from the debounce by the time
-  // anyone hits return, so results are on screen before expansion is asked for.
+  // Runs alongside the search below. Its *pending* state is read by nothing on
+  // the results path — no loading, error, or empty branch consults it, so
+  // expansion can take 20 seconds or fail outright and the list is unaffected.
+  const expansion = useExpansion(submitted);
+
+  // `names` is empty until expansion lands, so this starts as a plain keyword
+  // search and widens into the full fan-out when the names arrive. The widening
+  // changes the query key; keepPreviousData inside the hook keeps the first
+  // results on screen while the wider search runs.
   const { data, isLoading, isError, error, refetch, isFetching } = useEvents(
     debouncedKeyword,
     debouncedCity,
+    expansion.names,
   );
-
-  // Runs alongside the search above and is read by nothing on the results path
-  // — no loading, error, or empty branch below consults it. Expansion can take
-  // 20 seconds or fail outright and the list is unaffected either way.
-  const expansion = useExpansion(submitted);
 
   const { data: saved } = useSavedEvents();
   const { toggle } = useToggleSave();
@@ -118,7 +121,7 @@ export default function BrowseScreen() {
 
         {/* Sits between the inputs and the list, outside every results branch —
             it can never replace or delay what's below it. */}
-        <ExpansionStrip {...expansion} />
+        <ExpansionStrip {...expansion} isSearching={isFetching} />
 
         {isLoading ? (
           <LoadingState />
@@ -161,8 +164,8 @@ export default function BrowseScreen() {
             ListFooterComponent={
               duplicatesRemoved > 0 ? (
                 <ThemedText type="small" themeColor="textSecondary" style={styles.footer}>
-                  Merged {duplicatesRemoved} duplicate
-                  {duplicatesRemoved === 1 ? '' : 's'} across sources
+                  {data?.queryCount ?? 0} searches · merged {duplicatesRemoved} duplicate
+                  {duplicatesRemoved === 1 ? '' : 's'}
                 </ThemedText>
               ) : null
             }
@@ -183,8 +186,18 @@ function SourceNotices({ data }: { data: ReturnType<typeof useEvents>['data'] })
   if (!data) return null;
 
   const notices = [
-    ...data.skipped.map((s) => `${s.label}: no API key configured`),
-    ...data.failures.map((f) => `${f.label}: ${f.message.toLowerCase()}`),
+    ...data.skipped.map((s) => `${s.label}: not configured`),
+    ...data.failures.map((f) =>
+      // A source is only "down" when every one of its queries failed. A few
+      // failures out of forty is a different situation and shouldn't read like
+      // an outage — so say which it is.
+      f.failedQueries >= f.totalQueries
+        ? `${f.label}: ${f.message.toLowerCase()}`
+        : // Name a query that failed. "3 of 25 failed" alone leaves the cause to
+          // be guessed at; the keyword is what makes it diagnosable.
+          `${f.label}: ${f.message.toLowerCase()} on ${f.failedQueries} of ${f.totalQueries} queries` +
+          (f.sampleQueries[0] ? ` (e.g. "${f.sampleQueries[0]}")` : ''),
+    ),
   ];
 
   if (notices.length === 0) return null;

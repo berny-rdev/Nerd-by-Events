@@ -79,9 +79,12 @@ function merge(cluster: Event[]): Event {
     };
   }
 
-  if (ordered.length > 1) {
-    base.mergedFrom = [...new Set(ordered.map((event) => event.source))] as SourceId[];
-  }
+  // Only when genuinely more than one *source* contributed. A cluster can now
+  // hold several records from one source (the same event returned by two
+  // different queries), and labelling that as "merged from Ticketmaster" would
+  // be a badge that says nothing.
+  const contributors = [...new Set(ordered.map((event) => event.source))] as SourceId[];
+  if (contributors.length > 1) base.mergedFrom = contributors;
 
   return base;
 }
@@ -94,10 +97,33 @@ function byStartTime(a: Event, b: Event): number {
   return a.startsAt.localeCompare(b.startsAt);
 }
 
+/**
+ * Collapses records that are provably the same: identical `id`, which is
+ * `${source}:${sourceId}` and therefore unique per source record.
+ *
+ * This is what makes fanning out safe. Searching "Hatsune Miku" and "Hatsune
+ * Miku Expo" returns the same Ticketmaster event twice with byte-identical
+ * ids — an exact match, needing none of the fuzzy title/time reasoning below.
+ * Doing it as a separate first pass means the heuristic matcher never has to be
+ * loosened to handle same-source duplicates, so its tuning for the genuinely
+ * hard case (different sources describing one event differently) is untouched.
+ *
+ * First occurrence wins. Two records with the same id are the same record.
+ */
+export function dedupeExactIds(events: Event[]): Event[] {
+  const byId = new Map<string, Event>();
+  for (const event of events) {
+    if (!byId.has(event.id)) byId.set(event.id, event);
+  }
+  return [...byId.values()];
+}
+
 export function dedupeEvents(events: Event[]): Event[] {
   const groups = new Map<string, Event[]>();
 
-  for (const event of events) {
+  // Exact identity first, heuristics second — cheaper, and it keeps clusters
+  // small enough that the fuzzy pass stays predictable under fan-out volume.
+  for (const event of dedupeExactIds(events)) {
     const key = groupKey(event);
     const existing = groups.get(key);
     if (existing) existing.push(event);

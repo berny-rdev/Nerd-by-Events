@@ -48,6 +48,7 @@ export default {
       waitUntil: (promise) => ctx.waitUntil(promise),
       callModel,
       upstreamFetch: (input, init) => fetch(input, init),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       rateLimiter,
     };
 

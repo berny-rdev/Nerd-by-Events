@@ -47,10 +47,18 @@ const mocked = (source: unknown) => source as MockedSource;
 
 const ALL_SOURCES = [ticketmaster, seatgeek, serpapi];
 
+/**
+ * Ids are counter-based, never derived from the title — see the note in
+ * dedupe.test.ts. Two events that should share an id must be built by spreading
+ * one record, not by giving two records the same title.
+ */
+let nextId = 0;
+
 function makeEvent(overrides: Partial<Event> & { source: SourceId; title: string }): Event {
+  nextId += 1;
   return {
-    id: `${overrides.source}:${overrides.title}`,
-    sourceId: overrides.title,
+    id: `${overrides.source}:${nextId}`,
+    sourceId: String(nextId),
     startsAt: '2026-09-01T23:00:00.000Z',
     venue: { name: 'Madison Square Garden', city: 'New York' },
     url: 'https://example.com',
@@ -59,6 +67,7 @@ function makeEvent(overrides: Partial<Event> & { source: SourceId; title: string
 }
 
 beforeEach(() => {
+  nextId = 0;
   jest.clearAllMocks();
   // Default: every provider is configured and returns nothing. Each test then
   // changes only the provider it cares about.
@@ -92,6 +101,9 @@ describe('searchEvents partial failure', () => {
         label: 'Google Events',
         message: 'quota exceeded',
         isAuthError: false,
+        failedQueries: 1,
+        totalQueries: 1,
+        sampleQueries: [''],
       },
     ]);
   });
@@ -128,6 +140,149 @@ describe('searchEvents partial failure', () => {
     expect(result.events[0].mergedFrom).toEqual(['ticketmaster', 'seatgeek']);
     // rawCount is pre-dedupe, which is what lets the UI say "merged 1 duplicate".
     expect(result.rawCount).toBe(2);
+  });
+});
+
+describe('searchEvents fan-out over expanded names', () => {
+  const NAMES = ['Hatsune Miku', 'Miku Expo', 'Luo Tianyi', 'Ado'];
+
+  const keywordsFor = (source: unknown) =>
+    mocked(source).search.mock.calls.map((call) => call[0].keyword);
+
+  it('runs one query per name per source, plus the raw query', async () => {
+    await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    // Ticketmaster's budget (25) covers the raw query and all four names.
+    expect(keywordsFor(ticketmaster)).toEqual(['vocaloid', ...NAMES]);
+    expect(keywordsFor(seatgeek)).toEqual(['vocaloid', ...NAMES]);
+  });
+
+  it('keeps searching the raw query even when names are present', async () => {
+    await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    // The raw text occasionally hits something the expansion missed, and it is
+    // what produced the results already on screen.
+    expect(keywordsFor(ticketmaster)[0]).toBe('vocaloid');
+  });
+
+  it('caps SerpAPI at the raw query plus a couple of names', async () => {
+    await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    const serpapiKeywords = keywordsFor(serpapi);
+    // ~100 searches/month on the free tier — it must not receive the full list.
+    expect(serpapiKeywords.length).toBeLessThanOrEqual(3);
+    expect(serpapiKeywords[0]).toBe('vocaloid');
+    expect(serpapiKeywords.length).toBeLessThan(keywordsFor(ticketmaster).length);
+  });
+
+  it('searches only the raw query before expansion arrives', async () => {
+    await searchEvents({ keyword: 'vocaloid' });
+
+    for (const source of ALL_SOURCES) {
+      expect(keywordsFor(source)).toEqual(['vocaloid']);
+    }
+  });
+
+  it('gives expanded names a smaller result limit than the raw query', async () => {
+    await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    const calls = mocked(ticketmaster).search.mock.calls.map((call) => call[0]);
+    expect(calls[0].limit).toBeGreaterThan(calls[1].limit);
+  });
+
+  it('forwards the city and abort signal to every query', async () => {
+    const controller = new AbortController();
+    await searchEvents({
+      keyword: 'vocaloid',
+      city: 'Austin',
+      names: NAMES,
+      signal: controller.signal,
+    });
+
+    for (const call of mocked(ticketmaster).search.mock.calls) {
+      expect(call[0].city).toBe('Austin');
+      expect(call[0].signal).toBe(controller.signal);
+    }
+  });
+
+  it('reports how many requests it made', async () => {
+    const result = await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    const expected =
+      keywordsFor(ticketmaster).length + keywordsFor(seatgeek).length + keywordsFor(serpapi).length;
+    expect(result.queryCount).toBe(expected);
+  });
+
+  it('collapses the same event returned by two different queries', async () => {
+    // The whole reason dedupe had to change: one Ticketmaster record matching
+    // both "Hatsune Miku" and "Hatsune Miku Expo".
+    const duplicate = makeEvent({ source: 'ticketmaster', title: 'Hatsune Miku Expo 2026' });
+    mocked(ticketmaster).search.mockResolvedValue([duplicate]);
+    mocked(seatgeek).search.mockResolvedValue([]);
+    mocked(serpapi).search.mockResolvedValue([]);
+
+    const result = await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    expect(result.events).toHaveLength(1);
+    // Fetched once per query, merged down to one.
+    expect(result.rawCount).toBe(keywordsFor(ticketmaster).length);
+    expect(result.events[0].mergedFrom).toBeUndefined();
+  });
+
+  it('aggregates failures per source rather than per query', async () => {
+    mocked(ticketmaster).search.mockRejectedValue(new Error('down'));
+
+    const result = await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    const ticketmasterFailures = result.failures.filter((f) => f.source === 'ticketmaster');
+    // Five queries failed; the user should be told once.
+    expect(ticketmasterFailures).toHaveLength(1);
+    expect(ticketmasterFailures[0].failedQueries).toBe(5);
+    expect(ticketmasterFailures[0].totalQueries).toBe(5);
+  });
+
+  it('distinguishes a partly-failing source from a dead one', async () => {
+    let call = 0;
+    mocked(ticketmaster).search.mockImplementation(async () => {
+      call += 1;
+      if (call === 2) throw new Error('flaky');
+      return [];
+    });
+
+    const result = await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    const failure = result.failures.find((f) => f.source === 'ticketmaster');
+    expect(failure?.failedQueries).toBe(1);
+    expect(failure?.totalQueries).toBe(5);
+  });
+
+  it('lets an auth error outrank a transient one in the aggregated message', async () => {
+    let call = 0;
+    mocked(seatgeek).search.mockImplementation(async () => {
+      call += 1;
+      if (call === 1) throw new Error('socket hang up');
+      throw new HttpError(401, 'https://proxy.test/seatgeek/events', 'nope');
+    });
+
+    const result = await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    const failure = result.failures.find((f) => f.source === 'seatgeek');
+    // One rejected key explains every other failure for that source; "socket
+    // hang up" would send someone debugging the network instead.
+    expect(failure?.isAuthError).toBe(true);
+    expect(failure?.message).toBe('Rejected the API key');
+  });
+
+  it('keeps a surviving source when another fails across every query', async () => {
+    mocked(ticketmaster).search.mockRejectedValue(new Error('down'));
+    mocked(seatgeek).search.mockResolvedValue([
+      makeEvent({ source: 'seatgeek', title: 'Radiohead' }),
+    ]);
+
+    const result = await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    expect(result.events).toHaveLength(1);
+    expect(result.failures.map((f) => f.source)).toEqual(['ticketmaster']);
   });
 });
 
@@ -206,6 +361,9 @@ describe('searchEvents with a provider that breaks its contract', () => {
         label: 'SeatGeek',
         message: 'Returned a non-array (undefined)',
         isAuthError: false,
+        failedQueries: 1,
+        totalQueries: 1,
+        sampleQueries: [''],
       },
     ]);
   });
@@ -220,6 +378,9 @@ describe('searchEvents with a provider that breaks its contract', () => {
         label: 'SeatGeek',
         message: 'Returned a non-array (null)',
         isAuthError: false,
+        failedQueries: 1,
+        totalQueries: 1,
+        sampleQueries: [''],
       },
     ]);
   });
@@ -268,6 +429,9 @@ describe('searchEvents with a provider that breaks its contract', () => {
         label: 'SeatGeek',
         message: 'Missing SeatGeek client id',
         isAuthError: false,
+        failedQueries: 1,
+        totalQueries: 1,
+        sampleQueries: [''],
       },
     ]);
   });
@@ -332,7 +496,7 @@ describe('searchEvents source reporting', () => {
     await searchEvents(query);
 
     for (const source of ALL_SOURCES) {
-      expect(mocked(source).search).toHaveBeenCalledWith(query);
+      expect(mocked(source).search).toHaveBeenCalledWith(expect.objectContaining(query));
     }
   });
 });
@@ -378,5 +542,34 @@ describe('searchEvents failure messages', () => {
     const result = await searchEvents({});
 
     expect(result.failures[0]).toMatchObject({ source: 'serpapi', message: 'Unknown error' });
+  });
+});
+
+describe('searchEvents failure diagnosability', () => {
+  const NAMES = ['Hatsune Miku', 'DECO*27', 'Luo Tianyi', 'Ado'];
+
+  it('names the queries that failed, not just the count', async () => {
+    // The bug this exists for: "3 of 25 queries failed" is undiagnosable, so
+    // the cause gets guessed at instead of read off.
+    mocked(ticketmaster).search.mockImplementation(async ({ keyword }) => {
+      if (keyword === 'DECO*27' || keyword === 'Ado') throw new Error('boom');
+      return [];
+    });
+
+    const result = await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    const failure = result.failures.find((f) => f.source === 'ticketmaster');
+    expect(failure?.failedQueries).toBe(2);
+    expect(failure?.sampleQueries).toEqual(['DECO*27', 'Ado']);
+  });
+
+  it('caps the sample so a fully-dead source does not list every query', async () => {
+    mocked(seatgeek).search.mockRejectedValue(new Error('down'));
+
+    const result = await searchEvents({ keyword: 'vocaloid', names: NAMES });
+
+    const failure = result.failures.find((f) => f.source === 'seatgeek');
+    expect(failure?.failedQueries).toBe(5);
+    expect(failure?.sampleQueries).toHaveLength(3);
   });
 });

@@ -24,15 +24,31 @@ jest.mock('@react-native-async-storage/async-storage', () =>
  */
 const STORAGE_KEY = 'nearby-events:saved:v1';
 
+/**
+ * Ids come from a counter so two `makeEvent()` calls are two distinct records.
+ *
+ * The default used to be the fixed `'ticketmaster:1'`, which made every
+ * no-override call the *same* event. Nothing relied on that — every multi-row
+ * test here passes explicit ids — but `saveEvent` skips an event whose id is
+ * already stored, so a future two-row test written without explicit ids would
+ * have silently stored one row and passed for the wrong reason.
+ *
+ * Same fix as the `makeEvent` helpers in the sources tests: identity is
+ * independent of every other field, so a test that wants two records to share
+ * an id has to say so.
+ */
+let nextId = 0;
+
 function makeEvent(overrides: Partial<Event> = {}): Event {
+  nextId += 1;
   return {
-    id: 'ticketmaster:1',
-    sourceId: '1',
+    id: `ticketmaster:${nextId}`,
+    sourceId: String(nextId),
     source: 'ticketmaster',
     title: 'Radiohead',
     startsAt: '2026-09-01T23:00:00.000Z',
     venue: { name: 'Madison Square Garden', city: 'New York' },
-    url: 'https://example.com/1',
+    url: `https://example.com/${nextId}`,
     ...overrides,
   };
 }
@@ -51,6 +67,7 @@ async function seedRaw(raw: string) {
 }
 
 beforeEach(async () => {
+  nextId = 0;
   await AsyncStorage.clear();
   jest.clearAllMocks();
 });

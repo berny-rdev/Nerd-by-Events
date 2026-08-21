@@ -4,8 +4,12 @@ import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import type { useExpansion } from '@/hooks/use-expansion';
+import { namesSearched } from '@/sources/plan';
 
-type Props = ReturnType<typeof useExpansion>;
+type Props = ReturnType<typeof useExpansion> & {
+  /** True while the widened fan-out is in flight. */
+  isSearching: boolean;
+};
 
 /**
  * The expansion state, rendered above the results.
@@ -15,7 +19,15 @@ type Props = ReturnType<typeof useExpansion>;
  * and every terminal state here still leaves those results on screen. There is
  * no branch that produces a dead end.
  */
-export function ExpansionStrip({ profile, names, isPending, isEmpty, isError, isActive }: Props) {
+export function ExpansionStrip({
+  profile,
+  names,
+  isPending,
+  isEmpty,
+  isError,
+  isActive,
+  isSearching,
+}: Props) {
   const theme = useTheme();
 
   // Nothing submitted yet.
@@ -66,10 +78,27 @@ export function ExpansionStrip({ profile, names, isPending, isEmpty, isError, is
       </ScrollView>
 
       <ThemedText type="small" themeColor="textSecondary" style={styles.footnote}>
-        {names.length} related name{names.length === 1 ? '' : 's'} — not searched yet
+        {describeSearchState(names.length, isSearching)}
       </ThemedText>
     </View>
   );
+}
+
+/**
+ * The footnote used to read "not searched yet", which was true only in the phase
+ * before the fan-out existed. It now reports what actually happened.
+ *
+ * The "N of M" case is real rather than defensive: per-source budgets cap how
+ * many names are used, so with more names than the widest budget allows, the
+ * tail of the list genuinely never reaches a source.
+ */
+function describeSearchState(nameCount: number, isSearching: boolean): string {
+  const searched = namesSearched(nameCount);
+  const noun = `related name${searched === 1 ? '' : 's'}`;
+
+  if (isSearching) return `Searching ${searched} ${noun}…`;
+  if (searched < nameCount) return `Searched ${searched} of ${nameCount} ${noun}`;
+  return `Searched ${searched} ${noun}`;
 }
 
 const styles = StyleSheet.create({

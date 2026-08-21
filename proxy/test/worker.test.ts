@@ -14,7 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { memoryCache } from '../src/lib/cache.ts';
-import { memoryRateLimiter } from '../src/lib/rate-limit.ts';
+import { memoryRateLimiter, ruleFor } from '../src/lib/rate-limit.ts';
 import { MODELS } from '../src/model.ts';
 import { handleRequest } from '../src/router.ts';
 import type { Deps, Env, ModelRequest, ModelResult } from '../src/types.ts';
@@ -53,6 +53,8 @@ type Harness = {
   /** Every model request the route made, in order. */
   modelCalls: ModelRequest[];
   upstreamCalls: string[];
+  /** Backoff durations the route asked for, in order. Never actually waited. */
+  sleeps: number[];
   setModel: (fn: (request: ModelRequest) => ModelResult | Promise<ModelResult>) => void;
   setUpstream: (fn: (url: string) => Response | Promise<Response>) => void;
   advance: (ms: number) => void;
@@ -63,6 +65,7 @@ type Harness = {
 function makeHarness(): Harness {
   const modelCalls: ModelRequest[] = [];
   const upstreamCalls: string[] = [];
+  const sleeps: number[] = [];
   const pending: Promise<unknown>[] = [];
   let clock = 1_700_000_000_000;
 
@@ -89,6 +92,9 @@ function makeHarness(): Harness {
       upstreamCalls.push(url);
       return upstream(url);
     },
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
     rateLimiter: memoryRateLimiter(),
   };
 
@@ -96,6 +102,7 @@ function makeHarness(): Harness {
     deps,
     modelCalls,
     upstreamCalls,
+    sleeps,
     setModel: (fn) => {
       model = fn;
     },
@@ -662,6 +669,39 @@ test('rate limiting triggers and reports Retry-After', async () => {
   assert.equal(h.modelCalls.length, 15, 'a rate-limited request must not reach the model');
 });
 
+test('event routes allow at least ten full fan-out searches per minute', async () => {
+  // Regression guard for the sizing, not the mechanism. A search is ~25
+  // requests to Ticketmaster now; a flat limit sized for one-request searches
+  // caps a user at under five searches a minute.
+  const perSearch = { '/ticketmaster/events': 25, '/seatgeek/events': 15, '/serpapi/events': 3 };
+
+  for (const [path, cost] of Object.entries(perSearch)) {
+    const searches = ruleFor(path).limit / cost;
+    assert.ok(
+      searches >= 10,
+      `${path} allows only ${searches} searches/min at ${cost} requests each`,
+    );
+  }
+});
+
+test('event routes are limited independently, not from one shared pool', async () => {
+  const h = makeHarness();
+  h.setUpstream(() => new Response('{"events":[]}', { status: 200 }));
+
+  // Exhausting one route must not lock a user out of the others — otherwise a
+  // Ticketmaster-heavy fan-out would starve SeatGeek mid-search.
+  const tmLimit = ruleFor('/ticketmaster/events').limit;
+  for (let i = 0; i < tmLimit; i++) {
+    await handleRequest(get(`/ticketmaster/events?keyword=k${i}`), makeEnv(), h.deps);
+  }
+
+  const blocked = await handleRequest(get('/ticketmaster/events?keyword=x'), makeEnv(), h.deps);
+  const other = await handleRequest(get('/seatgeek/events?keyword=x'), makeEnv(), h.deps);
+
+  assert.equal(blocked.status, 429);
+  assert.equal(other.status, 200);
+});
+
 test('rate limit windows are per client', async () => {
   const h = makeHarness();
   h.setModel(() => modelText(GOOD_PROFILE));
@@ -840,4 +880,89 @@ test('oversized bodies are rejected before parsing', async () => {
 
   assert.equal(response.status, 413);
   assert.equal(h.modelCalls.length, 0);
+});
+
+// ----------------------------------------------------- upstream spike arrest
+
+test('retries a 429 and succeeds without surfacing a failure', async () => {
+  const h = makeHarness();
+  let calls = 0;
+  // Ticketmaster enforces 5 requests/second and a fan-out sends it 25, so a
+  // few 429s per search are expected rather than exceptional.
+  h.setUpstream(() => {
+    calls += 1;
+    return calls === 1
+      ? new Response('{"fault":{"faultstring":"Spike arrest violation"}}', { status: 429 })
+      : new Response(JSON.stringify({ _embedded: { events: [{ id: 'tm1' }] } }), { status: 200 });
+  });
+
+  const response = await handleRequest(get('/ticketmaster/events?keyword=x'), makeEnv(), h.deps);
+
+  assert.equal(response.status, 200);
+  assert.equal(calls, 2, 'should have retried exactly once');
+  assert.equal((await bodyOf(response))._embedded.events.length, 1);
+});
+
+test('backs off between attempts with jitter, not a fixed delay', async () => {
+  const h = makeHarness();
+  h.setUpstream(() => new Response('rate limited', { status: 429 }));
+
+  await handleRequest(get('/ticketmaster/events?keyword=x'), makeEnv(), h.deps);
+
+  // A fan-out is ~25 near-simultaneous invocations; identical backoffs would
+  // retry in lockstep and trip the same per-second limit again.
+  assert.equal(h.sleeps.length, 2, 'two backoffs across three attempts');
+  assert.ok(h.sleeps[0] >= 250 && h.sleeps[0] < 500, `first backoff ${h.sleeps[0]}`);
+  assert.ok(h.sleeps[1] >= 700 && h.sleeps[1] < 1400, `second backoff ${h.sleeps[1]}`);
+});
+
+test('gives up after the attempt cap and reports the query that failed', async () => {
+  const h = makeHarness();
+  h.setUpstream(() => new Response('still rate limited', { status: 429 }));
+
+  const response = await handleRequest(
+    get('/ticketmaster/events?keyword=DECO*27&city=Los+Angeles&limit=10'),
+    makeEnv(),
+    h.deps,
+  );
+
+  assert.equal(response.status, 502);
+  const body = await bodyOf(response);
+  assert.equal(body.status, 429);
+  // The failing query is reported rather than left to be guessed at.
+  assert.equal(body.query, 'DECO*27|Los Angeles|10');
+  assert.equal(h.upstreamCalls.length, 3);
+});
+
+test('does not retry a status that will not change', async () => {
+  const h = makeHarness();
+  h.setUpstream(() => new Response('bad request', { status: 400 }));
+
+  const response = await handleRequest(get('/ticketmaster/events?keyword=x'), makeEnv(), h.deps);
+
+  assert.equal(response.status, 502);
+  // Retrying a 400 just burns quota — only transient statuses are retried.
+  assert.equal(h.upstreamCalls.length, 1);
+  assert.equal(h.sleeps.length, 0);
+});
+
+test('special characters survive the app -> worker -> upstream hop intact', async () => {
+  const h = makeHarness();
+  h.setUpstream(() => new Response('{"_embedded":{"events":[]}}', { status: 200 }));
+
+  // Verified against the live API: these all return results. The 502s were
+  // spike arrest, never encoding.
+  for (const keyword of ['DECO*27', 'AC/DC', 'Simon & Garfunkel', 'P!nk', "Rockin'on Japan"]) {
+    h.upstreamCalls.length = 0;
+    await handleRequest(
+      new Request(`https://proxy.test/ticketmaster/events?keyword=${encodeURIComponent(keyword)}`, {
+        headers: { 'CF-Connecting-IP': '9.9.9.9' },
+      }),
+      makeEnv(),
+      h.deps,
+    );
+
+    const sent = new URL(h.upstreamCalls[0]).searchParams.get('keyword');
+    assert.equal(sent, keyword, `keyword mangled: ${keyword} -> ${sent}`);
+  }
 });
